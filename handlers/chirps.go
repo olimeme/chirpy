@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,7 +68,23 @@ func (cfg *ApiConfig) CreateChirp(res http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *ApiConfig) GetChirps(res http.ResponseWriter, req *http.Request) {
-    dbChirps, err := cfg.Database.GetAllChirps(req.Context())
+    authorID := req.URL.Query().Get("author_id")
+    sortOrder := req.URL.Query().Get("sort")
+
+    var dbChirps []database.Chirp
+    var err error
+
+    if authorID != "" {
+        userID, parseErr := uuid.Parse(authorID)
+        if parseErr != nil {
+            helpers.RespondWithError(res, http.StatusBadRequest, "Invalid author ID")
+            return
+        }
+        dbChirps, err = cfg.Database.GetChirpsByUserID(req.Context(), userID)
+    } else {
+        dbChirps, err = cfg.Database.GetAllChirps(req.Context())
+    }
+
     if err != nil {
         helpers.RespondWithError(res, http.StatusInternalServerError, "Could not retrieve chirps")
         return
@@ -83,6 +100,13 @@ func (cfg *ApiConfig) GetChirps(res http.ResponseWriter, req *http.Request) {
             UserID:    dbChirp.UserID,
         }
     }
+
+    sort.Slice(chirps, func(i, j int) bool {
+        if sortOrder == "desc" {
+            return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+        }
+        return chirps[i].CreatedAt.Before(chirps[j].CreatedAt)
+    })
 
     helpers.RespondWithJSON(res, http.StatusOK, chirps)
 }
