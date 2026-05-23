@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/olimeme/helpers"
+	"github.com/olimeme/internal/auth"
 	"github.com/olimeme/internal/database"
 )
 
@@ -67,34 +69,67 @@ func (cfg *ApiConfig) ClearNumberOfReqs(res http.ResponseWriter, req *http.Reque
 
 func (cfg *ApiConfig) CreateUser(res http.ResponseWriter, req *http.Request) {
     type requestBody struct {
-        Email string `json:"email"`
+        Password string `json:"password"`
+        Email    string `json:"email"`
     }
 
     var body requestBody
-    decoder := json.NewDecoder(req.Body)
-    if err := decoder.Decode(&body); err != nil {
-        res.Header().Set("Content-Type", "application/json")
-        res.WriteHeader(http.StatusBadRequest)
-        json.NewEncoder(res).Encode(map[string]string{"error": err.Error()})
+    if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+        helpers.RespondWithError(res, http.StatusBadRequest, "Something went wrong")
         return
     }
 
-    dbUser, err := cfg.Database.CreateUser(req.Context(), body.Email)
+    hashedPassword, err := auth.HashPassword(body.Password)
     if err != nil {
-        res.Header().Set("Content-Type", "application/json")
-        res.WriteHeader(http.StatusInternalServerError)
-        json.NewEncoder(res).Encode(map[string]string{"error": err.Error()})
+        helpers.RespondWithError(res, http.StatusInternalServerError, "Could not hash password")
         return
     }
 
-    user := User{
+    dbUser, err := cfg.Database.CreateUser(req.Context(), database.CreateUserParams{
+        Email:          body.Email,
+        HashedPassword: hashedPassword,
+    })
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusInternalServerError, "Could not create user")
+        return
+    }
+
+    helpers.RespondWithJSON(res, http.StatusCreated, User{
         ID:        dbUser.ID,
         CreatedAt: dbUser.CreatedAt,
         UpdatedAt: dbUser.UpdatedAt,
         Email:     dbUser.Email,
+    })
+}
+
+func (cfg *ApiConfig) Login(res http.ResponseWriter, req *http.Request) {
+    type requestBody struct {
+        Password string `json:"password"`
+        Email    string `json:"email"`
     }
 
-    res.Header().Set("Content-Type", "application/json")
-    res.WriteHeader(http.StatusCreated)
-    json.NewEncoder(res).Encode(user)
+    var body requestBody
+    if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+        helpers.RespondWithError(res, http.StatusBadRequest, "Something went wrong")
+        return
+    }
+
+    dbUser, err := cfg.Database.GetUserByEmail(req.Context(), body.Email)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Incorrect email or password")
+        return
+    }
+
+    match, err := auth.CheckPasswordHash(body.Password, dbUser.HashedPassword)
+    if err != nil || !match {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Incorrect email or password")
+        return
+    }
+
+    helpers.RespondWithJSON(res, http.StatusOK, User{
+        ID:        dbUser.ID,
+        CreatedAt: dbUser.CreatedAt,
+        UpdatedAt: dbUser.UpdatedAt,
+        Email:     dbUser.Email,
+    })
 }
