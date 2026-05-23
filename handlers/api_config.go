@@ -19,13 +19,15 @@ type ApiConfig struct {
     Database       *database.Queries
     Platform       string
     JwtSecret      string
+    PolkaKey       string
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+    ID          uuid.UUID `json:"id"`
+    CreatedAt   time.Time `json:"created_at"`
+    UpdatedAt   time.Time `json:"updated_at"`
+    Email       string    `json:"email"`
+    IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 
@@ -100,6 +102,7 @@ func (cfg *ApiConfig) CreateUser(res http.ResponseWriter, req *http.Request) {
         CreatedAt: dbUser.CreatedAt,
         UpdatedAt: dbUser.UpdatedAt,
         Email:     dbUser.Email,
+        IsChirpyRed:     dbUser.IsChirpyRed,
     })
 }
 
@@ -161,6 +164,7 @@ func (cfg *ApiConfig) Login(res http.ResponseWriter, req *http.Request) {
             CreatedAt: dbUser.CreatedAt,
             UpdatedAt: dbUser.UpdatedAt,
             Email:     dbUser.Email,
+            IsChirpyRed: dbUser.IsChirpyRed,
         },
         Token:        accessToken,
         RefreshToken: refreshToken,
@@ -200,6 +204,127 @@ func (cfg *ApiConfig) Revoke(res http.ResponseWriter, req *http.Request) {
 
     if err := cfg.Database.RevokeRefreshToken(req.Context(), tokenString); err != nil {
         helpers.RespondWithError(res, http.StatusInternalServerError, "Could not revoke token")
+        return
+    }
+
+    res.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *ApiConfig) UpdateUser(res http.ResponseWriter, req *http.Request) {
+    tokenString, err := auth.GetBearerToken(req.Header)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Missing or invalid token")
+        return
+    }
+
+    userID, err := auth.ValidateJWT(tokenString, cfg.JwtSecret)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Invalid token")
+        return
+    }
+
+    type requestBody struct {
+        Password string `json:"password"`
+        Email    string `json:"email"`
+    }
+
+    var body requestBody
+    if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+        helpers.RespondWithError(res, http.StatusBadRequest, "Something went wrong")
+        return
+    }
+
+    hashedPassword, err := auth.HashPassword(body.Password)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusInternalServerError, "Could not hash password")
+        return
+    }
+
+    dbUser, err := cfg.Database.UpdateUser(req.Context(), database.UpdateUserParams{
+        Email:          body.Email,
+        HashedPassword: hashedPassword,
+        ID:             userID,
+    })
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusInternalServerError, "Could not update user")
+        return
+    }
+
+    helpers.RespondWithJSON(res, http.StatusOK, User{
+        ID:        dbUser.ID,
+        CreatedAt: dbUser.CreatedAt,
+        UpdatedAt: dbUser.UpdatedAt,
+        Email:     dbUser.Email,
+        IsChirpyRed: dbUser.IsChirpyRed,
+    })
+}
+
+func (cfg *ApiConfig) DeleteChirp(res http.ResponseWriter, req *http.Request) {
+    tokenString, err := auth.GetBearerToken(req.Header)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Missing or invalid token")
+        return
+    }
+
+    userID, err := auth.ValidateJWT(tokenString, cfg.JwtSecret)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Invalid token")
+        return
+    }
+
+    chirpID, err := uuid.Parse(req.PathValue("chirpID"))
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusBadRequest, "Invalid chirp ID")
+        return
+    }
+
+    dbChirp, err := cfg.Database.GetChirpByID(req.Context(), chirpID)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusNotFound, "Chirp not found")
+        return
+    }
+
+    if dbChirp.UserID != userID {
+        helpers.RespondWithError(res, http.StatusForbidden, "You are not the author of this chirp")
+        return
+    }
+
+    if err := cfg.Database.DeleteChirp(req.Context(), chirpID); err != nil {
+        helpers.RespondWithError(res, http.StatusInternalServerError, "Could not delete chirp")
+        return
+    }
+
+    res.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *ApiConfig) PolkaWebhook(res http.ResponseWriter, req *http.Request) {
+    apiKey, err := auth.GetAPIKey(req.Header)
+    if err != nil || apiKey != cfg.PolkaKey {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Invalid API key")
+        return
+    }
+
+    type webhookData struct {
+        UserID uuid.UUID `json:"user_id"`
+    }
+    type requestBody struct {
+        Event string      `json:"event"`
+        Data  webhookData `json:"data"`
+    }
+
+    var body requestBody
+    if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+        helpers.RespondWithError(res, http.StatusBadRequest, "Something went wrong")
+        return
+    }
+
+    if body.Event != "user.upgraded" {
+        res.WriteHeader(http.StatusNoContent)
+        return
+    }
+
+    if err := cfg.Database.UpgradeUserToChirpyRed(req.Context(), body.Data.UserID); err != nil {
+        helpers.RespondWithError(res, http.StatusNotFound, "User not found")
         return
     }
 

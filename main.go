@@ -47,12 +47,17 @@ func main() {
 		log.Fatal("JWT_SECRET must be set")
 	}
 
+	polkaKey := os.Getenv("POLKA_KEY")
+	if polkaKey == "" {
+		log.Fatal("POLKA_KEY must be set")
+	}
 
 	apiCfg := handlers.ApiConfig{
 		FileserverHits: atomic.Int32{},
 		Database:       dbQueries,
 		Platform:       platform,
-		JwtSecret: 		jwtSecret,
+		JwtSecret:      jwtSecret,
+		PolkaKey:       polkaKey,
 	}
 
 	mux.Handle("/app/", apiCfg.MiddlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(root)))))
@@ -60,12 +65,15 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.GetNumberOfReqs)
 	mux.HandleFunc("POST /admin/reset", apiCfg.ClearNumberOfReqs)
 	mux.HandleFunc("POST /api/users", apiCfg.CreateUser)
+	mux.HandleFunc("PUT /api/users", apiCfg.UpdateUser)
 	mux.HandleFunc("POST /api/chirps", apiCfg.CreateChirp)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.DeleteChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.GetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.GetChirp)
 	mux.HandleFunc("POST /api/refresh", apiCfg.Refresh)
 	mux.HandleFunc("POST /api/revoke", apiCfg.Revoke)
 	mux.HandleFunc("POST /api/login", apiCfg.Login)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.PolkaWebhook)
 	
 	server := &http.Server{
 		Handler: mux,
