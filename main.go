@@ -42,10 +42,17 @@ func main() {
 		log.Fatal("PLATFORM must be set")
 	}
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET must be set")
+	}
+
+
 	apiCfg := handlers.ApiConfig{
 		FileserverHits: atomic.Int32{},
 		Database:       dbQueries,
 		Platform:       platform,
+		JwtSecret: 		jwtSecret,
 	}
 
 	mux.Handle("/app/", apiCfg.MiddlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(root)))))

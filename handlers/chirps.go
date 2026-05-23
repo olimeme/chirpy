@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/olimeme/helpers"
+	"github.com/olimeme/internal/auth"
 	"github.com/olimeme/internal/database"
 )
 type Chirp struct {
@@ -19,13 +20,24 @@ type Chirp struct {
 
 func (cfg *ApiConfig) CreateChirp(res http.ResponseWriter, req *http.Request) {
     type requestBody struct {
-        Body   string    `json:"body"`
-        UserID uuid.UUID `json:"user_id"`
+        Body string `json:"body"`
+    }
+
+    tokenString, err := auth.GetBearerToken(req.Header)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Missing or invalid token")
+        return
+    }
+
+    userID, err := auth.ValidateJWT(tokenString, cfg.JwtSecret)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusUnauthorized, "Invalid token")
+        return
     }
 
     var body requestBody
     if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-        helpers.RespondWithError(res, http.StatusBadRequest, err.Error())
+        helpers.RespondWithError(res, http.StatusBadRequest, "Something went wrong")
         return
     }
 
@@ -38,10 +50,10 @@ func (cfg *ApiConfig) CreateChirp(res http.ResponseWriter, req *http.Request) {
 
     dbChirp, err := cfg.Database.CreateChirp(req.Context(), database.CreateChirpParams{
         Body:   cleanedBody,
-        UserID: body.UserID,
+        UserID: userID,
     })
     if err != nil {
-        helpers.RespondWithError(res, http.StatusInternalServerError, err.Error())
+        helpers.RespondWithError(res, http.StatusInternalServerError, "Could not create chirp")
         return
     }
 

@@ -18,6 +18,7 @@ type ApiConfig struct {
     FileserverHits atomic.Int32
     Database       *database.Queries
     Platform       string
+    JwtSecret      string
 }
 
 type User struct {
@@ -104,8 +105,9 @@ func (cfg *ApiConfig) CreateUser(res http.ResponseWriter, req *http.Request) {
 
 func (cfg *ApiConfig) Login(res http.ResponseWriter, req *http.Request) {
     type requestBody struct {
-        Password string `json:"password"`
-        Email    string `json:"email"`
+        Password         string `json:"password"`
+        Email            string `json:"email"`
+        ExpiresInSeconds *int   `json:"expires_in_seconds"`
     }
 
     var body requestBody
@@ -126,10 +128,33 @@ func (cfg *ApiConfig) Login(res http.ResponseWriter, req *http.Request) {
         return
     }
 
-    helpers.RespondWithJSON(res, http.StatusOK, User{
-        ID:        dbUser.ID,
-        CreatedAt: dbUser.CreatedAt,
-        UpdatedAt: dbUser.UpdatedAt,
-        Email:     dbUser.Email,
+    const maxExpiry = time.Hour
+    expiry := maxExpiry
+    if body.ExpiresInSeconds != nil {
+        requested := time.Duration(*body.ExpiresInSeconds) * time.Second
+        if requested < maxExpiry {
+            expiry = requested
+        }
+    }
+
+    token, err := auth.MakeJWT(dbUser.ID, cfg.JwtSecret, expiry)
+    if err != nil {
+        helpers.RespondWithError(res, http.StatusInternalServerError, "Could not create token")
+        return
+    }
+
+    type response struct {
+        User
+        Token string `json:"token"`
+    }
+
+    helpers.RespondWithJSON(res, http.StatusOK, response{
+        User: User{
+            ID:        dbUser.ID,
+            CreatedAt: dbUser.CreatedAt,
+            UpdatedAt: dbUser.UpdatedAt,
+            Email:     dbUser.Email,
+        },
+        Token: token,
     })
 }
